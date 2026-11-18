@@ -1,4 +1,4 @@
-import { useRef, useMemo, useEffect } from 'react';
+import { useRef, useMemo, useEffect, useLayoutEffect } from 'react';
 import { useForm } from 'react-hook-form';
 import { ChatContext, ComposerRestoreProvider } from '@librechat/chat/react';
 import type { SideChatSurfaceProps } from '@librechat/chat/react';
@@ -38,7 +38,8 @@ export default function SideChatSurface({
   focusWhenReady,
   children,
 }: SideChatSurfaceProps) {
-  const methods = useForm<ChatFormValues>({ defaultValues: { text: draft } });
+  /** Empty is what the form goes back to once a message is sent; the draft is put in below. */
+  const methods = useForm<ChatFormValues>({ defaultValues: { text: '' } });
   const { enterToSend, autoSendText, speechSettingsInitialized } = useComposerPreferences();
   const { ask, conversation, setConversation } = contract;
   const target = useTarget(conversation, setConversation);
@@ -68,11 +69,21 @@ export default function SideChatSurface({
   }, [ask, conversationId, handedText, methods, onHandedTextTaken, sendable]);
 
   /**
-   * The panel keeps the words not sent yet; this form is where they are written. It reports
-   * every change, and takes one made from outside (the words of a turn the server never kept,
-   * put back by the panel) when it is not what the field already holds.
+   * The panel keeps the words not sent yet; this form is where they are written. It takes what
+   * the panel holds when it is not what the field already holds: the words a composer drawn
+   * again starts with, before it is painted, and the words of a turn the server never kept,
+   * put back by the panel. And it reports every change of its own.
    */
-  const reported = useRef(draft);
+  const reported = useRef('');
+  useLayoutEffect(() => {
+    if (draft === reported.current) {
+      return;
+    }
+    reported.current = draft;
+    if (methods.getValues('text') !== draft) {
+      methods.setValue('text', draft, { shouldValidate: true });
+    }
+  }, [draft, methods]);
   useEffect(() => {
     const watching = methods.watch((values) => {
       const text = values.text ?? '';
@@ -83,15 +94,6 @@ export default function SideChatSurface({
     });
     return () => watching.unsubscribe();
   }, [methods, onDraftChange]);
-  useEffect(() => {
-    if (draft === reported.current) {
-      return;
-    }
-    reported.current = draft;
-    if (methods.getValues('text') !== draft) {
-      methods.setValue('text', draft, { shouldValidate: true });
-    }
-  }, [draft, methods]);
 
   /**
    * What is written here while a reply runs is saved under this pane's own key until the run

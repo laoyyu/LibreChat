@@ -266,9 +266,17 @@ test('with drafts not saved, the words outlive the panel being drawn again @scen
   await page.setViewportSize({ width: 700, height: 900 });
   const sheet = page.getByRole('dialog', { name: 'Side chat' });
   await expect(sheet).toBeVisible();
-  await expect(sheet.getByRole('textbox', { name: 'Message input' })).toHaveValue(
-    'kept across the breakpoint',
-  );
+  const carried = sheet.getByRole('textbox', { name: 'Message input' });
+  await expect(carried).toHaveValue('kept across the breakpoint');
+
+  /** Sent from the composer drawn again, the words go once: the field is empty afterwards. */
+  const followUp = uniqueLabel('sent-once');
+  await carried.click();
+  await page.keyboard.press('ControlOrMeta+a');
+  await page.keyboard.type(replyPrompt(followUp));
+  await page.keyboard.press('Enter');
+  await expect(sheet).toContainText(replyText(followUp), { timeout: 30_000 });
+  await expect(carried).toHaveValue('');
 });
 
 test('with drafts not saved, a file staged for one side chat is not sent with the next @scenario:side-chat-composer-files-stay-with-their-conversation', async ({
