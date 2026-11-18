@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { TProductTrackingConfig, TTelemetryConfig } from './config';
+import { agentServerFacts } from './tracking/agents';
 
 /** Product events are off unless the deployment explicitly enables them. */
 export function getProductTrackingConfig(telemetry?: TTelemetryConfig): TProductTrackingConfig {
@@ -35,6 +36,7 @@ export const browserProductFactSchema = z.discriminatedUnion('name', [
 
 /** Server facts follow confirmed settings writes. */
 export const serverProductFactSchema = z.discriminatedUnion('name', [
+  ...agentServerFacts,
   z.strictObject({
     name: z.literal('librechat.langfuse.connection.changed'),
     enabled: z.boolean(),
