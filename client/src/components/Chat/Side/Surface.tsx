@@ -4,9 +4,9 @@ import { ChatContext, ComposerRestoreProvider } from '@librechat/chat/react';
 import type { SideChatSurfaceProps } from '@librechat/chat/react';
 import type { AddedChatContract } from '~/hooks/Chat/contract';
 import type { ChatFormValues } from '~/common';
+import { getFilesDraft, migrateTextDraft, getPendingDraftId, migrateFilesDraft } from '~/utils';
 import { useComposerPreferences } from '~/Providers/ComposerPreferencesContext';
 import DragDropWrapper from '~/components/Chat/Input/Files/DragDropWrapper';
-import { useChatSettings } from '~/Providers/ChatSettingsContext';
 import { AddedChatContext, ChatFormProvider } from '~/Providers';
 import { TargetContext } from '~/Providers/TargetContext';
 import ChatForm from '~/components/Chat/Input/ChatForm';
@@ -80,15 +80,37 @@ export default function SideChatSurface({
   }, [methods, onReturnedTextTaken, returnedText]);
 
   /**
-   * With drafts saved, the words not sent yet are kept under the conversation's id, where main
-   * chat's composer finds them. With drafts off nothing keeps them, so the panel reads them
-   * from here when the conversation moves.
+   * The words not sent yet go with the conversation by hand when it becomes the main chat. A
+   * saved draft cannot be relied on to carry them: none is kept with drafts off, and one
+   * written while a reply runs is kept under this pane, not under the conversation.
    */
-  const { saveDrafts } = useChatSettings();
   useEffect(() => {
-    onUnsentWords(saveDrafts ? null : () => methods.getValues('text'));
+    onUnsentWords(() => methods.getValues('text'));
     return () => onUnsentWords(null);
-  }, [methods, onUnsentWords, saveDrafts]);
+  }, [methods, onUnsentWords]);
+
+  /**
+   * What is written here while a reply runs is saved under this pane's own key until the run
+   * ends. A side chat can close before then, and whatever opens in the pane next is another
+   * conversation. So on the way out those words and attachments are moved to the conversation
+   * they were written for, where it finds them when it is opened again. Deferred until the
+   * form's own cleanup has written its last keystrokes.
+   */
+  const { index } = contract;
+  useEffect(() => {
+    if (conversationId === '') {
+      return;
+    }
+    const pending = getPendingDraftId(index);
+    return () => {
+      setTimeout(() => {
+        migrateTextDraft(pending, conversationId);
+        if (getFilesDraft(pending).fileIds.length > 0) {
+          migrateFilesDraft(pending, conversationId);
+        }
+      }, 0);
+    };
+  }, [conversationId, index]);
 
   const form = useRef<HTMLDivElement>(null);
   const focused = useRef(false);
@@ -114,7 +136,7 @@ export default function SideChatSurface({
                 {children}
                 <div ref={form} className="shrink-0">
                   <ChatForm
-                    index={contract.index}
+                    index={index}
                     routePending={!ready}
                     isLandingPage={false}
                     enterToSend={enterToSend}

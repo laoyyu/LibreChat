@@ -23,9 +23,8 @@ export type SideChatSurfaceProps = {
   returnedText?: string;
   onReturnedTextTaken: () => void;
   /**
-   * Gives the panel a way to read the words not sent yet, for when the conversation moves to
-   * the page's main chat and nothing else would carry them there; `null` takes it away. A
-   * composer that keeps a conversation's draft where main chat's finds it gives none.
+   * Gives the panel a way to read the words not sent yet, which it hands to the page's main
+   * chat when the conversation moves there; `null` takes it away.
    */
   onUnsentWords: (read: (() => string) | null) => void;
   /** Whether the deployment draws a footer bar the composer has to clear. */

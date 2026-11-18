@@ -205,3 +205,50 @@ test('with drafts not saved, the words still go with the conversation @scenario:
     page.locator('main form').first().getByRole('textbox', { name: 'Message input' }),
   ).toHaveValue('not saved anywhere');
 });
+
+test('words written in one side chat stay with it, not with the next one opened @scenario:side-chat-composer-draft-stays-with-its-conversation', async ({
+  page,
+}) => {
+  test.setTimeout(180_000);
+  const first = uniqueLabel('first');
+  const second = uniqueLabel('second');
+  const firstUrl = await startChat(page, first);
+  const secondUrl = await startChat(page, second);
+  await startChat(page, uniqueLabel('on-screen'));
+  const openFromSidebar = async (url: string, label: string) => {
+    await openChatHistory(page);
+    const row = conversationRow(page, url);
+    await row.hover();
+    await row.getByRole('button', { name: 'Conversation Menu Options' }).click();
+    await page.getByRole('menuitem', { name: 'Open beside chat' }).click();
+    const panel = page.getByRole('region', { name: 'Side chat' });
+    await expect(panel).toContainText(replyText(label), { timeout: 30_000 });
+    return panel;
+  };
+
+  /** Written while the first conversation's reply runs, then the side chat is closed. */
+  let sideChat = await openFromSidebar(firstUrl, first);
+  let field = sideChat.getByRole('textbox', { name: 'Message input' });
+  await field.click();
+  await page.keyboard.type(`E2E_SLOW_REPLY:${uniqueLabel('left-running')}`);
+  await page.keyboard.press('Enter');
+  await expect(sideChat).toContainText('chunk-005', { timeout: 30_000 });
+  await field.click();
+  await page.keyboard.type('meant for the first');
+  await sideChat.getByRole('button', { name: 'Close' }).click();
+  await expect(page.getByRole('region', { name: 'Side chat' })).toHaveCount(0);
+
+  /** Another conversation opened beside the chat does not find them in its composer. */
+  sideChat = await openFromSidebar(secondUrl, second);
+  field = sideChat.getByRole('textbox', { name: 'Message input' });
+  await expect(field).toBeFocused();
+  await expect(field).toHaveValue('');
+  await sideChat.getByRole('button', { name: 'Close' }).click();
+
+  /** The conversation they were written for does, once its reply is in. */
+  sideChat = await openFromSidebar(firstUrl, first);
+  await expect(sideChat).toContainText('chunk-159', { timeout: 90_000 });
+  await expect(sideChat.getByRole('textbox', { name: 'Message input' })).toHaveValue(
+    'meant for the first',
+  );
+});
