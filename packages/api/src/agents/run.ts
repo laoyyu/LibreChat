@@ -3,6 +3,7 @@ import { logger } from '@librechat/data-schemas';
 import { ensureHandler } from '@langchain/core/callbacks/manager';
 import { Run, Providers, Constants, GraphEvents, HookRegistry } from '@librechat/agents';
 import {
+  hasActivePiiPatterns,
   KnownEndpoints,
   EModelEndpoint,
   ReasoningEffort,
@@ -64,11 +65,14 @@ import type { LangfuseTraceContext } from '~/langfuse/identity';
 import type { ResolvedAlwaysApplySkill } from '~/agents/skills';
 import type { CodeExecutionContext } from '~/agents/execution';
 import type { SubagentCodeHostArgSpecs } from '~/code/targets';
+import type { SdkFileSession } from './remoteSdk/attachments';
 import type { MCPToolAlias } from '~/tools/classification';
 import type { ReviewedToolApprovals } from './hitl/modes';
 import type { SubagentUsageEvent } from '~/agents/usage';
 import type { ProvisionState } from '~/agents/resources';
+import type { SdkModelHost } from './remoteSdk/builder';
 import type { RunFileSession } from './files/session';
+import type { SdkAgentRuntimeLoader } from './sdk';
 import type { RunFadingTiers } from './fading';
 import type * as t from '~/types';
 import {
@@ -122,8 +126,10 @@ import { applyCustomHandoffPromptKeyCompatibility } from '~/agents/handoffPrompt
 import { stripIntentFromToolRegistry, stripIntentFromToolDefinitions } from '~/agents/intent';
 import { createAgentToolApprovalSession, bindRunToolApprovalSession } from './hitl/modes';
 import { resolveConfigHeaders, resolveModelHeaders, mergeHeaders } from '~/utils/headers';
+import { createSdkAgentRun, resolveSdkAgentBinding, SdkAgentRuntimeError } from './sdk';
 import { interruptToolHandler, supportsRunInterruption } from '~/agents/steering/tools';
 import { getLLMConfig as getAnthropicLLMConfig } from '~/endpoints/anthropic/llm';
+import { hasModelBoundContentProtection } from '../middleware/modelBoundContent';
 import { reportSubagentResolutionFailure } from '~/agents/failures/subagent';
 import { createScheduledMCPRunPolicy } from '~/schedules/authorization/run';
 import { CREATE_FILE_TOOL_NAME, EDIT_FILE_TOOL_NAME } from '~/agents/tools';
@@ -134,6 +140,7 @@ import { buildEffectiveToolApprovalPolicy } from '~/agents/hitl/allow';
 import { prepareQueuedCodeFileContext } from '~/files/code/queued';
 import { getBuiltInBaseURL } from '~/endpoints/openai/initialize';
 import { getProviderConfig } from '~/endpoints/config/providers';
+import { createSafeUser, createSafeAgent } from '~/utils/env';
 import { shareDeferredDefinitions } from '~/agents/deferral';
 import { buildToolApprovalHooks } from '~/agents/hitl/hooks';
 import { getAgentCheckpointer } from '~/agents/checkpointer';
@@ -146,7 +153,6 @@ import { getCustomEndpointConfig } from '~/app/config';
 import { applyTestRunHook } from '~/agents/testHook';
 import { frameDynamicInstructions } from './tail';
 import { isUserProvided } from '~/utils/common';
-import { createSafeUser } from '~/utils/env';
 
 /** Expected shape of JSON tool search results */
 interface ToolSearchJsonResult {
@@ -446,8 +452,8 @@ export function isDeepSeekReasoningProvider(
 /**
  * Whether prior assistant tool-call messages should have `reasoning_content`
  * reconstructed when reformatting persisted history (cross-turn replay): either
- * DeepSeek thinking-mode (#13366) or a custom OpenAI-compatible endpoint that
- * opted in via `customParams.includeReasoningHistory` (e.g. Xiaomi MiMo, Kimi).
+ * Google signed history, DeepSeek thinking-mode (#13366), or a custom
+ * OpenAI-compatible endpoint that opted in via `customParams.includeReasoningHistory` (e.g. Xiaomi MiMo, Kimi).
  */
 export function shouldReplayReasoningContent(
   agent?: {
@@ -459,6 +465,9 @@ export function shouldReplayReasoningContent(
 ): boolean {
   if (agent == null) {
     return false;
+  }
+  if (agent.provider === Providers.GOOGLE || agent.provider === Providers.VERTEXAI) {
+    return true;
   }
   if (agent.includeReasoningHistory === true) {
     return true;
@@ -943,7 +952,12 @@ function resolveOpenAISummarization(
   model: string,
   appConfig: AppConfig | undefined,
   parameters: SummarizationConfig['parameters'],
-  headerContext: { user?: IUser; tenantId?: string; requestBody?: t.RequestBody },
+  headerContext: {
+    user?: IUser;
+    tenantId?: string;
+    requestBody?: t.RequestBody;
+    agent?: Partial<Agent>;
+  },
 ): { provider: string; clientOverrides: SummarizationClientOverrides } | undefined {
   const overrides = summarizationTransportOverrides(parameters);
   const baseURL = overrides.baseURL ?? getBuiltInBaseURL(EModelEndpoint.openAI);
@@ -983,6 +997,7 @@ function resolveOpenAISummarization(
         user: createSafeUser(headerContext.user),
         tenantId: headerContext.tenantId,
         body: headerContext.requestBody,
+        agent: headerContext.agent,
       }),
       transportTimeouts: resolveModelTransportTimeouts(appConfig?.endpoints?.agents),
     },
@@ -1076,7 +1091,12 @@ function resolveAzureSummarization(
   model: string,
   appConfig: AppConfig | undefined,
   parameters: SummarizationConfig['parameters'],
-  headerContext: { user?: IUser; tenantId?: string; requestBody?: t.RequestBody },
+  headerContext: {
+    user?: IUser;
+    tenantId?: string;
+    requestBody?: t.RequestBody;
+    agent?: Partial<Agent>;
+  },
   source?: RunAgent,
 ): { provider: string; clientOverrides: SummarizationClientOverrides } | undefined {
   const sourceOptions = source?.model_parameters as Partial<t.OAIClientOptions> | undefined;
@@ -1124,6 +1144,7 @@ function resolveAzureSummarization(
         user: createSafeUser(headerContext.user),
         tenantId: headerContext.tenantId,
         body: headerContext.requestBody,
+        agent: headerContext.agent,
       });
   const { llmConfig, configOptions } = getOpenAIConfig(
     azureOptions.azureOpenAIApiKey,
@@ -1209,7 +1230,12 @@ function resolveAzureSummarization(
 function resolveSummarizationProvider(
   rawProvider: string,
   appConfig: AppConfig | undefined,
-  headerContext: { user?: IUser; tenantId?: string; requestBody?: t.RequestBody },
+  headerContext: {
+    user?: IUser;
+    tenantId?: string;
+    requestBody?: t.RequestBody;
+    agent?: Partial<Agent>;
+  },
   target: {
     model?: string;
     parameters?: SummarizationConfig['parameters'];
@@ -1280,6 +1306,7 @@ function resolveSummarizationProvider(
             user: createSafeUser(headerContext.user),
             tenantId: headerContext.tenantId,
             body: headerContext.requestBody,
+            agent: headerContext.agent,
           })
         : undefined;
     /**
@@ -1402,7 +1429,12 @@ function shapeSummarizationConfig(
   fallbackModel: string | undefined,
   appConfig: AppConfig | undefined,
   agentEndpoint: string | undefined,
-  headerContext: { user?: IUser; tenantId?: string; requestBody?: t.RequestBody },
+  headerContext: {
+    user?: IUser;
+    tenantId?: string;
+    requestBody?: t.RequestBody;
+    agent?: Partial<Agent>;
+  },
   agent?: RunAgent,
 ) {
   const rawProvider = config?.provider ?? fallbackProvider;
@@ -2293,6 +2325,10 @@ export async function createRun({
   toolApprovalAllows,
   toolInputValidationErrors,
   sessionStartSource,
+  loadSdkRuntime,
+  sdkModelHost,
+  sdkFiles,
+  sdkResumeState,
   streaming = true,
   streamUsage = true,
 }: {
@@ -2447,11 +2483,26 @@ export async function createRun({
   sessionStartSource?: string;
   /** Request-scoped tool input failures consumed by the completion handler. */
   toolInputValidationErrors?: Map<string, ToolInputValidationError>;
+  loadSdkRuntime?: SdkAgentRuntimeLoader;
+  sdkModelHost?: SdkModelHost;
+  sdkFiles?: SdkFileSession;
+  sdkResumeState?: import('./remoteSdk/types').RemoteSdkResumeState;
 } & Pick<
   RunConfig,
   'tokenCounter' | 'customHandlers' | 'indexTokenCountMap' | 'initialSessions'
 >): Promise<Run<IState>> {
   const resolvedRunId = runId ?? randomUUID();
+  const registration = resolveSdkAgentBinding(
+    agents,
+    appConfig?.endpoints?.agents,
+    user?.role,
+    hasModelBoundContentProtection(appConfig?.filters) ||
+      hasActivePiiPatterns(appConfig?.messageFilter?.pii),
+    sdkModelHost != null &&
+      modelCallbacks?.some(
+        (callback) => callback.name === 'librechat-model-bound-content-filter',
+      ) === true,
+  );
   const runFilesActive =
     runFiles?.activate(
       resolvedRunId,
@@ -2505,6 +2556,9 @@ export async function createRun({
   /** Admin kill switch for the ask tool — see {@link isAskUserQuestionAdminDisabled}. */
   const askToolAdminDisabled = isAskUserQuestionAdminDisabled(appConfig);
 
+  /** Resolves `{{LIBRECHAT_AGENT_ID}}`; derived once so subagent steps share the turn's id. */
+  const safePrimaryAgent = createSafeAgent(agents[0]);
+
   // Independently initialized agents must reserve the same live paths before advertising uploads.
   const codeFileAgents = new Map<string, RunAgent>();
   const visitedCodeFileAgents = new Set<string>();
@@ -2522,6 +2576,9 @@ export async function createRun({
 
   const preparedCodeFileAgents = new WeakSet(codeFileAgents.values());
   const buildAgentInput = (agent: RunAgent, opts: { isSubagent?: boolean } = {}): AgentInputs => {
+    if (agent.id !== agents[0]?.id && agent.sdk_runtime != null) {
+      throw new SdkAgentRuntimeError('sdk_runtime_composition_unsupported');
+    }
     if (!preparedCodeFileAgents.has(agent)) {
       if (agent.provisionState) agent.provisionState.codeEnvDestinations = undefined;
       codeFileAgents.set(agent.id, agent);
@@ -2568,6 +2625,7 @@ export async function createRun({
       user: createSafeUser(user),
       tenantId,
       body: requestBody,
+      agent: safePrimaryAgent,
     });
 
     const modelParameters = normalizeAgentModelParameters(agent.model_parameters);
@@ -2577,7 +2635,7 @@ export async function createRun({
       selfModel,
       appConfig,
       agent.endpoint ?? undefined,
-      { user, tenantId, requestBody },
+      { user, tenantId, requestBody, agent: safePrimaryAgent },
       agent,
     );
     const summarization = modelCallbacks?.length
@@ -2913,6 +2971,7 @@ export async function createRun({
   const toolApprovalPolicy = resolveToolApprovalPolicy({
     endpoint: agentsEndpointConfig?.toolApproval,
     attachedCodeEnvironment: attachedCodeEnvironmentAgentIds.size > 0,
+    ownerApproval: scheduledMCPExecution?.mayAsk === true,
   });
   // Every caller needs the policy hooks, including API-key ingresses. Only
   // AgentClient supports pause/resume; the SDK blocks `ask` without HITL enabled.
@@ -3282,7 +3341,23 @@ export async function createRun({
     // older versions ignore the field.
     ...(streamLimits && { streamLimits }),
   };
-  const run = await Run.create(runConfig);
+  const run = registration
+    ? await createSdkAgentRun({
+        registration,
+        config: runConfig,
+        loadModule: loadSdkRuntime,
+        modelHost: sdkModelHost,
+        files: sdkFiles,
+        resumeState: sdkResumeState,
+        signal,
+        identity: {
+          agentId: agents[0].id,
+          conversationId: conversationId ?? requestBody?.conversationId ?? undefined,
+          userId: user?.id ?? '',
+          tenantId: tenantId ?? user?.tenantId,
+        },
+      })
+    : await Run.create(runConfig);
   if (approvalWiring != null) bindRunToolApprovalSession(run, agentApprovalSession);
   runMCPToolAliases.set(run, mcpToolAliases);
 

@@ -9,10 +9,12 @@ import {
   EImageOutputType,
   getMaxSubagents,
   setMaxSubagents,
+  setPiiRegexProgramSizer,
 } from 'librechat-data-provider';
 import type { TCustomConfig, TEndpoint } from 'librechat-data-provider';
 import type { ConfigOverrideIssue } from '@librechat/data-schemas';
 import type { ZodIssue } from 'zod';
+import { getPiiRegexProgramSize } from '~/protection/programSize';
 import { serviceRequestBudget } from '~/utils/timeouts';
 import { checkConfigPolicyLinks } from './interface';
 import { expandCustomEndpoint } from './params';
@@ -134,6 +136,25 @@ function reportPolicyLinkCheck(configPath: string, dropped: string[]): void {
   logger.warn(
     `Ignoring policy links in ${configPath} that are not http(s), mailto:, tel: or relative URLs; no link is published for them:\n` +
       dropped.map((path) => `- ${path}`).join('\n'),
+  );
+}
+
+/**
+ * `interface.schedules.mcpConsent.readOnlyPolicy` used to decide which MCP tools a scheduled
+ * chat could call. The schedule's owner chooses now, and the schema drops the key without a
+ * word, so an operator who still relies on it is told.
+ */
+function reportRetiredScheduleToolPolicy(configPath: string, config: unknown): void {
+  const schedules = (config as { interface?: { schedules?: unknown } } | null)?.interface
+    ?.schedules;
+  const consent = (schedules as { mcpConsent?: unknown } | null | undefined)?.mcpConsent;
+  if (consent == null || typeof consent !== 'object' || !('readOnlyPolicy' in consent)) {
+    return;
+  }
+  logger.warn(
+    `Ignoring interface.schedules.mcpConsent.readOnlyPolicy in ${configPath}: it no longer limits ` +
+      'which MCP tools a scheduled chat may call. Each schedule owner now chooses the allowed ' +
+      'tools when granting consent. Remove the key.',
   );
 }
 
@@ -292,8 +313,12 @@ export function createCustomConfigLoader({
       const linkCheck = checkConfigPolicyLinks(loadedConfig);
       loadedConfig = linkCheck.config;
       reportPolicyLinkCheck(configPath, linkCheck.dropped);
+      reportRetiredScheduleToolPolicy(configPath, loadedConfig);
 
       setMaxSubagents(getConfiguredMaxSubagents(loadedConfig));
+      /* `filters` PII patterns are sized by RE2, which the shared schema cannot carry. Every
+         entry point loads config through here, the CLI scripts included, so register it here. */
+      setPiiRegexProgramSizer(getPiiRegexProgramSize);
       const result = configSchema.strict().safeParse(loadedConfig);
       if (
         result.error?.issues.some(

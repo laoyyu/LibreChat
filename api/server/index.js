@@ -74,6 +74,8 @@ const {
   waitForKeyvRedisClient,
   warnOnUnreachableDeliveryPaths,
   createCodeApiUploadRegistry,
+  createSdkModelHost,
+  createSdkFileHost,
   createRequestSanitizer,
   reportEndpointOverrides,
 } = require('@librechat/api');
@@ -278,6 +280,8 @@ const startServer = async () => {
     }),
     { priority: 50 },
   );
+  app.locals.sdkFileHost = createSdkFileHost(appConfig?.endpoints?.agents?.sdkHostFiles);
+  app.locals.sdkModelHost = createSdkModelHost(appConfig?.endpoints?.agents?.sdkHostModels);
   await configureSubagentTaskRouting(appConfig?.endpoints?.agents?.subagentActivity);
   registerBackgroundTaskShutdown({
     interruptGraceMs: appConfig?.endpoints?.agents?.backgroundTasks?.shutdownInterruptGraceMs,

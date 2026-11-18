@@ -30,6 +30,7 @@ export type {
   SlackInstallGeneration,
 } from './models/slackWorkspace';
 export { createResponseStorage, sameResponseTerminalReceipt } from './methods/response';
+export { createAgentKeyMCPConsentStorage } from './methods/scheduleConsent';
 export type {
   ResponseOwner,
   ResponseStorage,
@@ -211,3 +212,7 @@ export * from './postgres/migrations';
 export * from './postgres/favorite';
 export * from './postgres/import';
 export * from './postgres/mongo';
+
+export { migrateMCPReservationIndex } from './migrations/mcpReservations';
+
+export { repairAuthorizationDuplicates } from './migrations/authorization';
