@@ -4,12 +4,12 @@ import { ChatContext, ComposerRestoreProvider } from '@librechat/chat/react';
 import type { SideChatSurfaceProps } from '@librechat/chat/react';
 import type { AddedChatContract } from '~/hooks/Chat/contract';
 import type { ChatFormValues } from '~/common';
-import { getFilesDraft, migrateTextDraft, getPendingDraftId, migrateFilesDraft } from '~/utils';
 import { useComposerPreferences } from '~/Providers/ComposerPreferencesContext';
 import DragDropWrapper from '~/components/Chat/Input/Files/DragDropWrapper';
 import { AddedChatContext, ChatFormProvider } from '~/Providers';
 import { TargetContext } from '~/Providers/TargetContext';
 import ChatForm from '~/components/Chat/Input/ChatForm';
+import { settlePendingDraft } from '~/utils';
 import useTarget from '~/hooks/Chat/target';
 
 /** A conversation beside the chat is compared with no other model. */
@@ -32,14 +32,13 @@ export default function SideChatSurface({
   ready,
   handedText,
   onHandedTextTaken,
-  returnedText,
-  onReturnedTextTaken,
-  onUnsentWords,
+  draft,
+  onDraftChange,
   clearsFooter,
   focusWhenReady,
   children,
 }: SideChatSurfaceProps) {
-  const methods = useForm<ChatFormValues>({ defaultValues: { text: '' } });
+  const methods = useForm<ChatFormValues>({ defaultValues: { text: draft } });
   const { enterToSend, autoSendText, speechSettingsInitialized } = useComposerPreferences();
   const { ask, conversation, setConversation } = contract;
   const target = useTarget(conversation, setConversation);
@@ -68,47 +67,53 @@ export default function SideChatSurface({
     onHandedTextTaken();
   }, [ask, conversationId, handedText, methods, onHandedTextTaken, sendable]);
 
-  /** A turn the server never kept gives its words back, unless something was written since. */
+  /**
+   * The panel keeps the words not sent yet; this form is where they are written. It reports
+   * every change, and takes one made from outside (the words of a turn the server never kept,
+   * put back by the panel) when it is not what the field already holds.
+   */
+  const reported = useRef(draft);
   useEffect(() => {
-    if (returnedText == null) {
+    const watching = methods.watch((values) => {
+      const text = values.text ?? '';
+      if (text !== reported.current) {
+        reported.current = text;
+        onDraftChange(text);
+      }
+    });
+    return () => watching.unsubscribe();
+  }, [methods, onDraftChange]);
+  useEffect(() => {
+    if (draft === reported.current) {
       return;
     }
-    if (methods.getValues('text').trim() === '') {
-      methods.setValue('text', returnedText, { shouldValidate: true });
+    reported.current = draft;
+    if (methods.getValues('text') !== draft) {
+      methods.setValue('text', draft, { shouldValidate: true });
     }
-    onReturnedTextTaken();
-  }, [methods, onReturnedTextTaken, returnedText]);
-
-  /**
-   * The words not sent yet go with the conversation by hand when it becomes the main chat. A
-   * saved draft cannot be relied on to carry them: none is kept with drafts off, and one
-   * written while a reply runs is kept under this pane, not under the conversation.
-   */
-  useEffect(() => {
-    onUnsentWords(() => methods.getValues('text'));
-    return () => onUnsentWords(null);
-  }, [methods, onUnsentWords]);
+  }, [draft, methods]);
 
   /**
    * What is written here while a reply runs is saved under this pane's own key until the run
    * ends. A side chat can close before then, and whatever opens in the pane next is another
-   * conversation. So on the way out those words and attachments are moved to the conversation
-   * they were written for, where it finds them when it is opened again. Deferred until the
-   * form's own cleanup has written its last keystrokes.
+   * conversation. So a composer that saw a run moves what it left there to its conversation on
+   * the way out. Deferred until the form's own cleanup has written its last keystrokes.
    */
-  const { index } = contract;
+  const { index, isSubmitting } = contract;
+  const ran = useRef(false);
+  useEffect(() => {
+    if (isSubmitting) {
+      ran.current = true;
+    }
+  }, [isSubmitting]);
   useEffect(() => {
     if (conversationId === '') {
       return;
     }
-    const pending = getPendingDraftId(index);
     return () => {
-      setTimeout(() => {
-        migrateTextDraft(pending, conversationId);
-        if (getFilesDraft(pending).fileIds.length > 0) {
-          migrateFilesDraft(pending, conversationId);
-        }
-      }, 0);
+      if (ran.current) {
+        setTimeout(() => settlePendingDraft(index, conversationId), 0);
+      }
     };
   }, [conversationId, index]);
 

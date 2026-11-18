@@ -1,4 +1,4 @@
-import { useRef, useState, useEffect, useCallback } from 'react';
+import { useRef, useEffect, useCallback } from 'react';
 import { useAtom } from 'jotai';
 import { ArrowUpRight, X } from 'lucide-react';
 import { cn, Button, Composer, useLocalize, useFocusTrap } from '@librechat/client';
@@ -163,25 +163,16 @@ export default function SideChatPanel({
    * A turn stopped before the server kept it is gone from the list. Its words go back in the
    * field, as main chat keeps them as a draft, unless the reader has written something since.
    */
-  const [returned, setReturned] = useState<string>();
-  const takesWords = host.Surface != null;
   const takeBack = useCallback(
     (turn: SubmittedTurn) => {
       const { submission } = turn;
       if (submission.isRegenerate === true) {
         return;
       }
-      const words = submission.userMessage.text ?? '';
-      /** The host's composer holds its own field, so the words are handed to it. */
-      if (takesWords) {
-        setReturned(words);
-        return;
-      }
-      setDraft((current) => (current === '' ? words : current));
+      setDraft((current) => (current === '' ? (submission.userMessage.text ?? '') : current));
     },
-    [setDraft, takesWords],
+    [setDraft],
   );
-  const clearReturned = useCallback(() => setReturned(undefined), []);
   const followed = host.useChat(chat.conversation, { onWithdrawn: takeBack });
   const panelRef = useRef<HTMLDivElement>(null);
 
@@ -215,16 +206,10 @@ export default function SideChatPanel({
   }, [isSheet, onClose]);
 
   const title = pane.conversation?.title ?? opened.title ?? localize('com_ui_new_chat');
-  /** How the host's composer lets its unsent words be read, when it holds them itself. */
-  const unsent = useRef<(() => string) | null>(null);
-  const takeUnsentReader = useCallback((read: (() => string) | null) => {
-    unsent.current = read;
-  }, []);
   const openAsMain = useCallback(() => {
     /** Words not sent yet go with the conversation, to the composer it opens under. */
-    const words = unsent.current?.() ?? draft;
-    if (words.trim() !== '') {
-      handOffComposerText(conversationId, words);
+    if (draft.trim() !== '') {
+      handOffComposerText(conversationId, draft);
     }
     openConversation(pane.conversation ?? opened);
     onClose();
@@ -287,9 +272,8 @@ export default function SideChatPanel({
               ready={held && !followed.isLoading}
               handedText={chat.text}
               onHandedTextTaken={onHandedTextTaken}
-              returnedText={returned}
-              onReturnedTextTaken={clearReturned}
-              onUnsentWords={takeUnsentReader}
+              draft={draft}
+              onDraftChange={setDraft}
               clearsFooter={clearsFooter}
               focusWhenReady={!isSheet}
             >

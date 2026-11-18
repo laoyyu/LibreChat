@@ -1,7 +1,6 @@
 /**
  * @jest-environment jsdom
  */
-import { useEffect } from 'react';
 import { atom, useAtom, Provider, createStore } from 'jotai';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, render, screen, waitFor, fireEvent } from '@testing-library/react';
@@ -123,26 +122,18 @@ const partsHost = createMessagePartsHost({
   ),
 });
 
-/** What the host's composer holds unsent. */
-let hostWords = '';
-
 /**
- * A host's own composer, as the app's is: it draws the list it is handed and sends through the
- * contract. What it was given is written out, so a spec reads it.
+ * A host's own composer, as the app's is: it draws the list it is handed, sends through the
+ * contract, and writes in the panel's draft. What it was given is written out, so a spec reads
+ * it.
  */
 function HostSurface({
   contract,
   children,
   onHandedTextTaken,
-  onReturnedTextTaken,
-  onUnsentWords,
+  onDraftChange,
   ...given
 }: SideChatSurfaceProps) {
-  /** A composer that holds its own field, and so lets the panel read what is in it. */
-  useEffect(() => {
-    onUnsentWords(() => hostWords);
-    return () => onUnsentWords(null);
-  }, [onUnsentWords]);
   return (
     <div data-testid="host-surface">
       {children}
@@ -153,8 +144,8 @@ function HostSurface({
       <button type="button" onClick={onHandedTextTaken}>
         Took handed
       </button>
-      <button type="button" onClick={onReturnedTextTaken}>
-        Took returned
+      <button type="button" onClick={() => onDraftChange('Half a thought')}>
+        Host types
       </button>
     </div>
   );
@@ -496,6 +487,7 @@ describe('SideChatPanel', () => {
         expect(given()).toEqual({
           ready: true,
           handedText: 'Go on',
+          draft: '',
           clearsFooter: false,
           focusWhenReady: true,
         }),
@@ -520,24 +512,28 @@ describe('SideChatPanel', () => {
       );
     });
 
-    it('takes the words its composer holds along when the conversation moves to the main chat', async () => {
-      hostWords = 'Half a thought';
-      const { handOffComposerText, openConversation } = setup({ Surface: HostSurface });
+    it('keeps what is written in it, and takes it along when the conversation moves to the main chat', async () => {
+      const { handOffComposerText, openConversation, remount } = setup({ Surface: HostSurface });
       await waitFor(() => expect(rows()).toHaveLength(2));
+      fireEvent.click(screen.getByRole('button', { name: 'Host types' }));
+      expect(given().draft).toBe('Half a thought');
+
+      /** Crossing the breakpoint draws the panel, and the host's composer, from nothing. */
+      remount();
+      await waitFor(() => expect(rows()).toHaveLength(2));
+      expect(given().draft).toBe('Half a thought');
 
       fireEvent.click(screen.getByRole('button', { name: 'Open as the main chat' }));
-
       expect(handOffComposerText).toHaveBeenCalledWith(conversationId, 'Half a thought');
       expect(openConversation).toHaveBeenCalledTimes(1);
-      hostWords = '';
     });
 
-    it('hands it the words of a turn the server never kept, until it has taken them', async () => {
+    it('gives it back the words of a turn the server never kept', async () => {
       const { streams } = setup({ Surface: HostSurface });
       await waitFor(() => expect(rows()).toHaveLength(2));
       fireEvent.click(screen.getByRole('button', { name: 'Host send' }));
       await waitFor(() => expect(streams).toHaveLength(1));
-      expect(given().returnedText).toBeUndefined();
+      expect(given().draft).toBe('');
 
       /** Stopped before the server had saved the turn. */
       act(() =>
@@ -553,9 +549,7 @@ describe('SideChatPanel', () => {
         } as unknown as ChatEvent),
       );
 
-      await waitFor(() => expect(given().returnedText).toBe('From the host'));
-      fireEvent.click(screen.getByRole('button', { name: 'Took returned' }));
-      expect(given().returnedText).toBeUndefined();
+      await waitFor(() => expect(given().draft).toBe('From the host'));
     });
   });
 

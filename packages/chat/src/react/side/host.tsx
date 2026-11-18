@@ -17,16 +17,14 @@ export type SideChatSurfaceProps = {
   handedText?: string;
   onHandedTextTaken: () => void;
   /**
-   * The words of a turn stopped before the server kept anything of it, to go back in the field
-   * unless the reader has written something since.
+   * The words the reader has written for this conversation and not sent. The panel keeps them,
+   * by conversation and in memory, so they outlive the composer: it is drawn again when the
+   * layout moves the panel, and a conversation closed and opened again finds them. The composer
+   * starts with them, shows them when the panel changes them (the words of a turn the server
+   * never kept come back this way), and reports every change of its own.
    */
-  returnedText?: string;
-  onReturnedTextTaken: () => void;
-  /**
-   * Gives the panel a way to read the words not sent yet, which it hands to the page's main
-   * chat when the conversation moves there; `null` takes it away.
-   */
-  onUnsentWords: (read: (() => string) | null) => void;
+  draft: string;
+  onDraftChange: (text: string) => void;
   /** Whether the deployment draws a footer bar the composer has to clear. */
   clearsFooter: boolean;
   /** Whether the field takes focus once the conversation is in; not as a modal sheet. */

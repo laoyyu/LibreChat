@@ -252,3 +252,79 @@ test('words written in one side chat stay with it, not with the next one opened 
     'meant for the first',
   );
 });
+
+test('with drafts not saved, the words outlive the panel being drawn again @scenario:side-chat-composer-draft-survives-a-layout-change', async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+  await page.addInitScript(() => localStorage.setItem('saveDrafts', 'false'));
+  const { field } = await openBeside(page, 'layout');
+  await field.click();
+  await page.keyboard.type('kept across the breakpoint');
+
+  /** Narrow enough that the panel leaves its column and is drawn again as a sheet. */
+  await page.setViewportSize({ width: 700, height: 900 });
+  const sheet = page.getByRole('dialog', { name: 'Side chat' });
+  await expect(sheet).toBeVisible();
+  await expect(sheet.getByRole('textbox', { name: 'Message input' })).toHaveValue(
+    'kept across the breakpoint',
+  );
+});
+
+test('with drafts not saved, a file staged for one side chat is not sent with the next @scenario:side-chat-composer-files-stay-with-their-conversation', async ({
+  page,
+}) => {
+  test.setTimeout(180_000);
+  await page.addInitScript(() => localStorage.setItem('saveDrafts', 'false'));
+  const first = uniqueLabel('files-first');
+  const second = uniqueLabel('files-second');
+  const firstUrl = await startChat(page, first);
+  const secondUrl = await startChat(page, second);
+  await startChat(page, uniqueLabel('files-on-screen'));
+  const openFromSidebar = async (url: string, label: string) => {
+    await openChatHistory(page);
+    const row = conversationRow(page, url);
+    await row.hover();
+    await row.getByRole('button', { name: 'Conversation Menu Options' }).click();
+    await page.getByRole('menuitem', { name: 'Open beside chat' }).click();
+    const panel = page.getByRole('region', { name: 'Side chat' });
+    await expect(panel).toContainText(replyText(label), { timeout: 30_000 });
+    return panel;
+  };
+
+  let sideChat = await openFromSidebar(firstUrl, first);
+  await sideChat.locator('form').getByRole('button', { name: 'Attach and tools' }).click();
+  const [chooser] = await Promise.all([
+    page.waitForEvent('filechooser'),
+    page.getByRole('button', { name: 'Upload to Provider', exact: true }).click(),
+  ]);
+  await Promise.all([
+    page.waitForResponse(
+      (response) => response.url().includes('/api/files') && response.request().method() === 'POST',
+      { timeout: 30_000 },
+    ),
+    chooser.setFiles({
+      name: 'for-the-first.txt',
+      mimeType: 'text/plain',
+      buffer: Buffer.from('Staged for the first conversation.\n'),
+    }),
+  ]);
+  await expect(sideChat.locator('form').getByText('for-the-first.txt')).toBeVisible();
+  await sideChat.getByRole('button', { name: 'Close' }).click();
+  await expect(page.getByRole('region', { name: 'Side chat' })).toHaveCount(0);
+
+  /** The next conversation's composer starts with nothing staged, and its turn carries no file. */
+  sideChat = await openFromSidebar(secondUrl, second);
+  await expect(sideChat.locator('form').getByText('for-the-first.txt')).toHaveCount(0);
+  const followUp = uniqueLabel('no-file');
+  await sideChat.getByRole('textbox', { name: 'Message input' }).click();
+  await page.keyboard.type(replyPrompt(followUp));
+  const [start] = await Promise.all([
+    page.waitForRequest((request) => isStart(request.url(), request.method())),
+    page.keyboard.press('Enter'),
+  ]);
+  const posted = start.postDataJSON() as { conversationId?: string; files?: unknown[] };
+  expect(secondUrl).toContain(posted.conversationId ?? 'none');
+  expect(posted.files ?? []).toEqual([]);
+  await expect(sideChat).toContainText(replyText(followUp), { timeout: 30_000 });
+});
