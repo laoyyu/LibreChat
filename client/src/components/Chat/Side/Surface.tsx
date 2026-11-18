@@ -1,16 +1,16 @@
 import { useRef, useMemo, useEffect } from 'react';
-import { useRecoilValue } from 'recoil';
 import { useForm } from 'react-hook-form';
 import { ChatContext, ComposerRestoreProvider } from '@librechat/chat/react';
 import type { SideChatSurfaceProps } from '@librechat/chat/react';
 import type { AddedChatContract } from '~/hooks/Chat/contract';
 import type { ChatFormValues } from '~/common';
+import { useComposerPreferences } from '~/Providers/ComposerPreferencesContext';
 import DragDropWrapper from '~/components/Chat/Input/Files/DragDropWrapper';
+import { useChatSettings } from '~/Providers/ChatSettingsContext';
 import { AddedChatContext, ChatFormProvider } from '~/Providers';
 import { TargetContext } from '~/Providers/TargetContext';
 import ChatForm from '~/components/Chat/Input/ChatForm';
 import useTarget from '~/hooks/Chat/target';
-import store from '~/store';
 
 /** A conversation beside the chat is compared with no other model. */
 const alone: AddedChatContract = {
@@ -34,14 +34,13 @@ export default function SideChatSurface({
   onHandedTextTaken,
   returnedText,
   onReturnedTextTaken,
+  onUnsentWords,
   clearsFooter,
   focusWhenReady,
   children,
 }: SideChatSurfaceProps) {
   const methods = useForm<ChatFormValues>({ defaultValues: { text: '' } });
-  const enterToSend = useRecoilValue(store.enterToSend);
-  const autoSendText = useRecoilValue(store.autoSendText);
-  const speechSettingsInitialized = useRecoilValue(store.speechSettingsInitialized);
+  const { enterToSend, autoSendText, speechSettingsInitialized } = useComposerPreferences();
   const { ask, conversation, setConversation } = contract;
   const target = useTarget(conversation, setConversation);
   const readiness = useMemo(
@@ -79,6 +78,17 @@ export default function SideChatSurface({
     }
     onReturnedTextTaken();
   }, [methods, onReturnedTextTaken, returnedText]);
+
+  /**
+   * With drafts saved, the words not sent yet are kept under the conversation's id, where main
+   * chat's composer finds them. With drafts off nothing keeps them, so the panel reads them
+   * from here when the conversation moves.
+   */
+  const { saveDrafts } = useChatSettings();
+  useEffect(() => {
+    onUnsentWords(saveDrafts ? null : () => methods.getValues('text'));
+    return () => onUnsentWords(null);
+  }, [methods, onUnsentWords, saveDrafts]);
 
   const form = useRef<HTMLDivElement>(null);
   const focused = useRef(false);

@@ -215,10 +215,16 @@ export default function SideChatPanel({
   }, [isSheet, onClose]);
 
   const title = pane.conversation?.title ?? opened.title ?? localize('com_ui_new_chat');
+  /** How the host's composer lets its unsent words be read, when it holds them itself. */
+  const unsent = useRef<(() => string) | null>(null);
+  const takeUnsentReader = useCallback((read: (() => string) | null) => {
+    unsent.current = read;
+  }, []);
   const openAsMain = useCallback(() => {
     /** Words not sent yet go with the conversation, to the composer it opens under. */
-    if (draft.trim() !== '') {
-      handOffComposerText(conversationId, draft);
+    const words = unsent.current?.() ?? draft;
+    if (words.trim() !== '') {
+      handOffComposerText(conversationId, words);
     }
     openConversation(pane.conversation ?? opened);
     onClose();
@@ -283,6 +289,7 @@ export default function SideChatPanel({
               onHandedTextTaken={onHandedTextTaken}
               returnedText={returned}
               onReturnedTextTaken={clearReturned}
+              onUnsentWords={takeUnsentReader}
               clearsFooter={clearsFooter}
               focusWhenReady={!isSheet}
             >

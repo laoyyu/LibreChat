@@ -1,6 +1,7 @@
 /**
  * @jest-environment jsdom
  */
+import { useEffect } from 'react';
 import { atom, useAtom, Provider, createStore } from 'jotai';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, render, screen, waitFor, fireEvent } from '@testing-library/react';
@@ -122,6 +123,9 @@ const partsHost = createMessagePartsHost({
   ),
 });
 
+/** What the host's composer holds unsent. */
+let hostWords = '';
+
 /**
  * A host's own composer, as the app's is: it draws the list it is handed and sends through the
  * contract. What it was given is written out, so a spec reads it.
@@ -131,8 +135,14 @@ function HostSurface({
   children,
   onHandedTextTaken,
   onReturnedTextTaken,
+  onUnsentWords,
   ...given
 }: SideChatSurfaceProps) {
+  /** A composer that holds its own field, and so lets the panel read what is in it. */
+  useEffect(() => {
+    onUnsentWords(() => hostWords);
+    return () => onUnsentWords(null);
+  }, [onUnsentWords]);
   return (
     <div data-testid="host-surface">
       {children}
@@ -508,6 +518,18 @@ describe('SideChatPanel', () => {
         'data-chat-pane',
         '3',
       );
+    });
+
+    it('takes the words its composer holds along when the conversation moves to the main chat', async () => {
+      hostWords = 'Half a thought';
+      const { handOffComposerText, openConversation } = setup({ Surface: HostSurface });
+      await waitFor(() => expect(rows()).toHaveLength(2));
+
+      fireEvent.click(screen.getByRole('button', { name: 'Open as the main chat' }));
+
+      expect(handOffComposerText).toHaveBeenCalledWith(conversationId, 'Half a thought');
+      expect(openConversation).toHaveBeenCalledTimes(1);
+      hostWords = '';
     });
 
     it('hands it the words of a turn the server never kept, until it has taken them', async () => {

@@ -16,6 +16,8 @@ let mockFinalTranscript = '';
 /** Delivers a recognizer result the way the library does: a reducer update that
  *  reaches the consumer only on React's next commit. */
 let mockDeliverFinal: (transcript: string) => void = () => undefined;
+/** Whether the hook last asked the library to collect what the page's recognizer hears. */
+let mockTranscribing: boolean | undefined;
 
 jest.mock('react-speech-recognition', () => {
   const { useState } = jest.requireActual<typeof import('react')>('react');
@@ -26,9 +28,10 @@ jest.mock('react-speech-recognition', () => {
       stopListening: (...args: unknown[]) => mockStopListening(...args),
       abortListening: (...args: unknown[]) => mockAbortListening(...args),
     },
-    useSpeechRecognition: () => {
+    useSpeechRecognition: (options?: { transcribing?: boolean }) => {
       const [finalTranscript, setFinalTranscript] = useState(mockFinalTranscript);
       mockDeliverFinal = setFinalTranscript;
+      mockTranscribing = options?.transcribing;
       return {
         listening: true,
         finalTranscript,
@@ -112,6 +115,38 @@ describe('useSpeechToTextBrowser', () => {
     expect(onTranscriptionComplete).not.toHaveBeenCalled();
     expect(mockAbortListening).toHaveBeenCalled();
     expect(mockResetTranscript).toHaveBeenCalled();
+  });
+
+  /* The recognizer is one per page and reports to every composer on it. With a second
+     composer mounted (a conversation open beside the chat), a take started in one must not be
+     written into the other, sent from it, or shown there as recording. */
+  it('collects a take, and shows itself listening, only in the composer that started it', async () => {
+    const { result } = setup();
+
+    /** Another composer is recording: the page's recognizer is listening, this one is not. */
+    expect(mockTranscribing).toBe(false);
+    expect(result.current.isListening).toBe(false);
+
+    act(() => {
+      result.current.startRecording(7);
+    });
+    expect(mockTranscribing).toBe(true);
+    expect(result.current.isListening).toBe(true);
+
+    await act(async () => {
+      await result.current.stopRecording();
+    });
+    expect(mockTranscribing).toBe(false);
+    expect(result.current.isListening).toBe(false);
+
+    act(() => {
+      result.current.startRecording(8);
+    });
+    expect(mockTranscribing).toBe(true);
+    act(() => {
+      result.current.abortRecording();
+    });
+    expect(mockTranscribing).toBe(false);
   });
 
   /* `abortListening` is optional on the recogniser module, and stopping still

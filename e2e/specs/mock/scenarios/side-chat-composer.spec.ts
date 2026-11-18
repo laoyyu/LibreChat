@@ -187,3 +187,21 @@ test('words not sent yet go with the conversation when it becomes the main chat 
     page.locator('main form').first().getByRole('textbox', { name: 'Message input' }),
   ).toHaveValue('still thinking about this');
 });
+
+test('with drafts not saved, the words still go with the conversation @scenario:side-chat-composer-draft-follows-without-saved-drafts', async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+  /** Nothing keeps a draft between composers here, so the words are handed over directly. */
+  await page.addInitScript(() => localStorage.setItem('saveDrafts', 'false'));
+  const { earlierUrl, sideChat, field } = await openBeside(page, 'unsaved');
+
+  await field.click();
+  await page.keyboard.type('not saved anywhere');
+  await sideChat.getByRole('button', { name: 'Open as the main chat' }).click();
+
+  await expect(page).toHaveURL(new URL(earlierUrl).pathname);
+  await expect(
+    page.locator('main form').first().getByRole('textbox', { name: 'Message input' }),
+  ).toHaveValue('not saved anywhere');
+});

@@ -46,6 +46,13 @@ const useSpeechToTextBrowser = (
   const [languageSTT] = useRecoilState<string>(store.languageSTT);
   const [autoTranscribeAudio] = useRecoilState<boolean>(store.autoTranscribeAudio);
 
+  /**
+   * Whether this composer asked for the take in progress. The page has one recognizer, and
+   * every composer on it is told what it hears. Only the one that started the take collects its
+   * transcript and shows itself listening, so a take in one composer is never written into
+   * another, or sent from it.
+   */
+  const [owns, setOwns] = useState(false);
   const {
     listening,
     finalTranscript,
@@ -53,8 +60,8 @@ const useSpeechToTextBrowser = (
     interimTranscript,
     isMicrophoneAvailable,
     browserSupportsSpeechRecognition,
-  } = useSpeechRecognition();
-  const isListening = listening;
+  } = useSpeechRecognition({ transcribing: owns });
+  const isListening = listening && owns;
 
   useEffect(() => {
     if (interimTranscript == null || interimTranscript === '') {
@@ -108,7 +115,27 @@ const useSpeechToTextBrowser = (
     }
     setStoppedTake(null);
     onTranscriptionSettled(stoppedTake.takeId);
+    setOwns(false);
   }, [stoppedTake, onTranscriptionSettled]);
+
+  /**
+   * A take the recognizer ended by itself is over too. Declared after the effects that write a
+   * transcript down, so the last words of the take, which arrive with its end, are in first.
+   */
+  const heard = useRef(false);
+  useEffect(() => {
+    if (!owns) {
+      heard.current = false;
+      return;
+    }
+    if (listening) {
+      heard.current = true;
+      return;
+    }
+    if (heard.current) {
+      setOwns(false);
+    }
+  }, [listening, owns]);
 
   const startRecording = useCallback(
     (takeId?: number) => {
@@ -141,6 +168,7 @@ const useSpeechToTextBrowser = (
         return;
       }
 
+      setOwns(true);
       SpeechRecognition.startListening({
         language: languageSTT,
         continuous: autoTranscribeAudio,
@@ -188,6 +216,7 @@ const useSpeechToTextBrowser = (
       }
     }
     resetTranscript();
+    setOwns(false);
   }, [resetTranscript]);
 
   return {
