@@ -286,6 +286,8 @@ describe('useDrivenContract', () => {
     expect(store.get(isSubmittingFamily(SIDE_PANE))).toBe(false);
     expect(store.get(showStopButtonByIndex(SIDE_PANE))).toBe(false);
     expect(result.current.contract.readOnly).toBeUndefined();
+    /** A stop here needs no generation named first: the chat finds the one to stop itself. */
+    expect(result.current.contract.stopsUnnamed).toBe(true);
   });
 
   it('keeps one row for a message the server stores under an id of its own', async () => {

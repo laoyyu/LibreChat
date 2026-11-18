@@ -11,6 +11,7 @@ import useAttachmentHandler from '~/hooks/SSE/useAttachmentHandler';
 import { ARTIFACTS_SHEET_MAX_WIDTH } from '~/utils/breakpoints';
 import { createConversationCache } from '~/hooks/SSE/services';
 import { useConfiguredFooter } from '~/components/Chat/Footer';
+import SideChatSurface from '~/components/Chat/Side/Surface';
 import useScaledMaxWidth from '~/hooks/useScaledMaxWidth';
 import { useChatTransport } from './ChatTransportContext';
 import { useChatSettings } from './ChatSettingsContext';
@@ -101,4 +102,5 @@ export const appSideChatHost: SideChatHost = {
   useOpenConversation,
   useSheetLayout: () => useScaledMaxWidth(ARTIFACTS_SHEET_MAX_WIDTH),
   useClearsFooter: useConfiguredFooter,
+  Surface: SideChatSurface,
 };

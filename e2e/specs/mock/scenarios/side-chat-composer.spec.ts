@@ -1,0 +1,189 @@
+import { expect, test } from '@playwright/test';
+import type { Page, Locator } from '@playwright/test';
+import {
+  replyText,
+  replyPrompt,
+  messagesView,
+  NEW_CHAT_PATH,
+  MOCK_ENDPOINTS,
+  conversationRow,
+  selectMockEndpoint,
+  sendMessageAndWaitForCompletion,
+} from '../helpers';
+import { openChatHistory } from './sidebar';
+
+/**
+ * The composer of a conversation open beside the chat is main chat's own form, for that
+ * conversation: what is attached, dropped, typed and stopped there is that conversation's, and
+ * the chat on screen keeps its own.
+ */
+test.use({ viewport: { width: 1440, height: 900 }, isMobile: false, hasTouch: false });
+
+const uniqueLabel = (prefix: string) =>
+  `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+
+async function startChat(page: Page, label: string): Promise<string> {
+  await page.goto(NEW_CHAT_PATH, { timeout: 10_000 });
+  await selectMockEndpoint(page, MOCK_ENDPOINTS[0]);
+  const response = await sendMessageAndWaitForCompletion(page, replyPrompt(label));
+  expect(response.ok()).toBeTruthy();
+  await expect(messagesView(page).getByText(replyText(label))).toBeVisible();
+  return page.url();
+}
+
+/** Two conversations: the first open beside the second, which stays on screen. */
+async function openBeside(page: Page, prefix: string) {
+  const earlier = uniqueLabel(`${prefix}-earlier`);
+  const earlierUrl = await startChat(page, earlier);
+  await startChat(page, uniqueLabel(`${prefix}-current`));
+  await openChatHistory(page);
+  const row = conversationRow(page, earlierUrl);
+  await row.hover();
+  await row.getByRole('button', { name: 'Conversation Menu Options' }).click();
+  await page.getByRole('menuitem', { name: 'Open beside chat' }).click();
+  const sideChat = page.getByRole('region', { name: 'Side chat' });
+  await expect(sideChat).toContainText(replyText(earlier), { timeout: 30_000 });
+  return {
+    earlierUrl,
+    sideChat,
+    side: sideChat.locator('form'),
+    main: page.locator('main form').first(),
+    field: sideChat.getByRole('textbox', { name: 'Message input' }),
+  };
+}
+
+const isStart = (url: string, method: string): boolean =>
+  method === 'POST' &&
+  /\/api\/agents\/chat\/[^/]+$/.test(new URL(url).pathname) &&
+  !url.endsWith('/abort');
+
+/** Drops a text file on `target`, and takes it as text when the deployment asks how. */
+async function dropFile(page: Page, target: Locator, name: string) {
+  const data = await page.evaluateHandle((filename) => {
+    const transfer = new DataTransfer();
+    transfer.items.add(new File(['dropped text\n'], filename, { type: 'text/plain' }));
+    return transfer;
+  }, name);
+  await target.dispatchEvent('dragenter', { dataTransfer: data });
+  await target.dispatchEvent('dragover', { dataTransfer: data });
+  await target.dispatchEvent('drop', { dataTransfer: data });
+  await page.getByRole('dialog').getByText('Upload as Text').click();
+}
+
+test('a file attached in the side chat goes out with that conversation’s turn @scenario:side-chat-composer-attaches-a-file', async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+  const { earlierUrl, sideChat, side, main, field } = await openBeside(page, 'attach');
+  const followUp = uniqueLabel('with-file');
+
+  /** Each composer is its own field: no id is on the page twice. */
+  const ids = await page
+    .locator('form textarea')
+    .evaluateAll((fields) => fields.map((field) => field.id));
+  expect(new Set(ids).size).toBe(ids.length);
+  expect(ids).toHaveLength(2);
+
+  await side.getByRole('button', { name: 'Attach and tools' }).click();
+  const [chooser] = await Promise.all([
+    page.waitForEvent('filechooser'),
+    page.getByRole('button', { name: 'Upload to Provider', exact: true }).click(),
+  ]);
+  const [uploaded] = await Promise.all([
+    page.waitForResponse(
+      (response) => response.url().includes('/api/files') && response.request().method() === 'POST',
+      { timeout: 30_000 },
+    ),
+    chooser.setFiles({
+      name: 'beside.txt',
+      mimeType: 'text/plain',
+      buffer: Buffer.from('For the conversation beside the chat.\n'),
+    }),
+  ]);
+  expect(uploaded.ok()).toBeTruthy();
+
+  /** The attachment is the side conversation's: the chat on screen has none. */
+  await expect(side.getByText('beside.txt')).toBeVisible();
+  await expect(main.getByText('beside.txt')).toHaveCount(0);
+
+  await field.click();
+  await page.keyboard.type(replyPrompt(followUp));
+  const [start] = await Promise.all([
+    page.waitForRequest((request) => isStart(request.url(), request.method())),
+    page.keyboard.press('Enter'),
+  ]);
+  const posted = start.postDataJSON() as {
+    conversationId?: string;
+    files?: Array<{ filename?: string }>;
+  };
+  expect(earlierUrl).toContain(posted.conversationId ?? 'none');
+  expect(posted.files?.map((file) => file.filename)).toEqual(['beside.txt']);
+
+  /** It went with the turn, and shows on the message it was sent with. */
+  await expect(sideChat).toContainText(replyText(followUp), { timeout: 30_000 });
+  await expect(side.getByText('beside.txt')).toHaveCount(0);
+  await expect(sideChat.locator('.message-render').getByText('beside.txt')).toBeVisible();
+});
+
+test('a file dropped on a conversation goes to that conversation’s composer @scenario:side-chat-composer-takes-its-own-drops', async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+  const { sideChat, side, main } = await openBeside(page, 'drop');
+
+  await dropFile(page, sideChat.locator('.message-render').first(), 'for-beside.txt');
+  await expect(side.getByText('for-beside.txt')).toBeVisible({ timeout: 30_000 });
+  await expect(main.getByText('for-beside.txt')).toHaveCount(0);
+
+  await dropFile(page, messagesView(page).locator('.message-render').first(), 'for-main.txt');
+  await expect(main.getByText('for-main.txt')).toBeVisible({ timeout: 30_000 });
+  await expect(side.getByText('for-main.txt')).toHaveCount(0);
+});
+
+test('a reply in a side chat is stopped from its composer @scenario:side-chat-composer-stops-a-reply', async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+  const { sideChat, side, field } = await openBeside(page, 'stop');
+
+  await field.click();
+  await page.keyboard.type(`E2E_SLOW_REPLY:${uniqueLabel('halted')}`);
+  await page.keyboard.press('Enter');
+  await expect(sideChat).toContainText('chunk-005', { timeout: 30_000 });
+
+  await side.getByRole('button', { name: 'Stop generating' }).click();
+
+  /** The reply stops where it was, and the composer takes the next turn. */
+  await expect(side.getByRole('button', { name: 'Stop generating' })).toHaveCount(0);
+  await expect(sideChat).not.toContainText('chunk-159');
+  const followUp = uniqueLabel('after-stop');
+  await field.click();
+  await page.keyboard.type(replyPrompt(followUp));
+  await page.keyboard.press('Enter');
+  await expect(sideChat).toContainText(replyText(followUp), { timeout: 30_000 });
+  await expect(sideChat).not.toContainText('chunk-159');
+});
+
+test('words not sent yet go with the conversation when it becomes the main chat @scenario:side-chat-composer-draft-follows-the-conversation', async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+  const { earlierUrl, sideChat, main, field } = await openBeside(page, 'draft');
+
+  /** Each composer holds its own words. */
+  await main.getByRole('textbox', { name: 'Message input' }).click();
+  await page.keyboard.type('for the chat on screen');
+  await field.click();
+  await page.keyboard.type('still thinking about this');
+  await expect(main.getByRole('textbox', { name: 'Message input' })).toHaveValue(
+    'for the chat on screen',
+  );
+
+  await sideChat.getByRole('button', { name: 'Open as the main chat' }).click();
+
+  await expect(page).toHaveURL(new URL(earlierUrl).pathname);
+  await expect(page.getByRole('region', { name: 'Side chat' })).toHaveCount(0);
+  await expect(
+    page.locator('main form').first().getByRole('textbox', { name: 'Message input' }),
+  ).toHaveValue('still thinking about this');
+});

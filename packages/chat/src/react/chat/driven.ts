@@ -178,6 +178,7 @@ export function useDrivenContract({ id, followed, index }: DrivenContractOptions
       handleRegenerate,
       handleContinue,
       stopGenerating,
+      stopsUnnamed: true,
       handleStopGenerating,
       abortScroll,
       setAbortScroll,

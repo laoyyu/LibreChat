@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import type { RefObject } from 'react';
-import { mainTextareaId } from '../../core/composer';
+import { isComposerTextarea } from '../../core/composer';
 import { isRectVisible } from '../../core/viewport';
 
 /** Focus is nowhere, or in the empty composer that just sent the turn. */
@@ -9,9 +9,7 @@ export function isFocusIdle(): boolean {
   return (
     active == null ||
     active === document.body ||
-    (active instanceof HTMLTextAreaElement &&
-      active.id === mainTextareaId &&
-      active.value.trim().length === 0)
+    (isComposerTextarea(active) && active.value.trim().length === 0)
   );
 }
 

@@ -6,8 +6,8 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { Constants, ContentTypes, EModelEndpoint } from 'librechat-data-provider';
 import type { TMessage, ChatEvent, TConversation } from 'librechat-data-provider';
+import type { SideChatHost, SideChatSurfaceProps } from '../../../react/side/host';
 import type { ChatStream, ChatTransport, ChatSendRequest } from '../../../core';
-import type { SideChatHost } from '../../../react/side/host';
 import type { SideChat } from '../../../react/side/state';
 import type { ChatHost } from '../../../react/chat/host';
 import {
@@ -122,14 +122,44 @@ const partsHost = createMessagePartsHost({
   ),
 });
 
+/**
+ * A host's own composer, as the app's is: it draws the list it is handed and sends through the
+ * contract. What it was given is written out, so a spec reads it.
+ */
+function HostSurface({
+  contract,
+  children,
+  onHandedTextTaken,
+  onReturnedTextTaken,
+  ...given
+}: SideChatSurfaceProps) {
+  return (
+    <div data-testid="host-surface">
+      {children}
+      <output data-testid="given">{JSON.stringify(given)}</output>
+      <button type="button" onClick={() => contract.ask({ text: 'From the host' })}>
+        Host send
+      </button>
+      <button type="button" onClick={onHandedTextTaken}>
+        Took handed
+      </button>
+      <button type="button" onClick={onReturnedTextTaken}>
+        Took returned
+      </button>
+    </div>
+  );
+}
+
 function setup({
   chat = { conversation },
   stored = [user, reply('response-1', 'It shipped.')],
   loadMessages = jest.fn(async () => stored),
+  Surface,
 }: {
   chat?: SideChat;
   stored?: TMessage[];
   loadMessages?: jest.Mock<Promise<TMessage[]>>;
+  Surface?: SideChatHost['Surface'];
 } = {}) {
   const streams: TestStream[] = [];
   const sendMessages = jest.fn(
@@ -153,6 +183,7 @@ function setup({
     useOpenConversation: () => openConversation,
     useSheetLayout: () => false,
     useClearsFooter: () => false,
+    Surface,
   };
   /** One pane store for everything that reads the pane, as the app's is. */
   const paneAtom = atom<TConversation | null>(null);
@@ -433,6 +464,77 @@ describe('SideChatPanel', () => {
 
     await waitFor(() => expect(field()).toHaveValue('What changed?'));
     expect(rows()).toEqual(['user=Investigate the release.', 'reply=It shipped.']);
+  });
+
+  describe("with a composer of the host's own", () => {
+    const given = () => JSON.parse(screen.getByTestId('given').textContent ?? '{}');
+
+    it("draws the host's composer around the list, on the conversation's contract", async () => {
+      const { sendMessages } = setup({
+        Surface: HostSurface,
+        chat: { conversation, text: 'Go on' },
+      });
+      await waitFor(() =>
+        expect(rows()).toEqual(['user=Investigate the release.', 'reply=It shipped.']),
+      );
+
+      /** The list is the host's to place, and the panel's plain field is not drawn beside it. */
+      const surface = screen.getByTestId('host-surface');
+      expect(surface).toContainElement(screen.getAllByTestId('row')[0]);
+      expect(screen.queryByRole('textbox', { name: 'Message input' })).not.toBeInTheDocument();
+      await waitFor(() =>
+        expect(given()).toEqual({
+          ready: true,
+          handedText: 'Go on',
+          clearsFooter: false,
+          focusWhenReady: true,
+        }),
+      );
+
+      /** A turn the host's composer builds runs in this conversation. */
+      fireEvent.click(screen.getByRole('button', { name: 'Host send' }));
+      await waitFor(() => expect(sendMessages).toHaveBeenCalledTimes(1));
+      expect(sendMessages.mock.calls[0][0].payload).toMatchObject({
+        conversationId,
+        text: 'From the host',
+      });
+    });
+
+    it('is its own pane to the keyboard, so a shortcut pressed in it acts on this conversation', async () => {
+      setup({ Surface: HostSurface });
+      await waitFor(() => expect(rows()).toHaveLength(2));
+
+      expect(screen.getByRole('region', { name: 'Side chat' })).toHaveAttribute(
+        'data-chat-pane',
+        '3',
+      );
+    });
+
+    it('hands it the words of a turn the server never kept, until it has taken them', async () => {
+      const { streams } = setup({ Surface: HostSurface });
+      await waitFor(() => expect(rows()).toHaveLength(2));
+      fireEvent.click(screen.getByRole('button', { name: 'Host send' }));
+      await waitFor(() => expect(streams).toHaveLength(1));
+      expect(given().returnedText).toBeUndefined();
+
+      /** Stopped before the server had saved the turn. */
+      act(() =>
+        streams[0].push({
+          type: 'final',
+          data: {
+            final: true,
+            earlyAbort: true,
+            conversation: { conversationId },
+            requestMessage: null,
+            responseMessage: null,
+          },
+        } as unknown as ChatEvent),
+      );
+
+      await waitFor(() => expect(given().returnedText).toBe('From the host'));
+      fireEvent.click(screen.getByRole('button', { name: 'Took returned' }));
+      expect(given().returnedText).toBeUndefined();
+    });
   });
 
   it('keeps a rerun in the side chat to its own conversation', async () => {
