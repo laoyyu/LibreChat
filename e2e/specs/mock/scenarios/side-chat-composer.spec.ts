@@ -336,3 +336,42 @@ test('with drafts not saved, a file staged for one side chat is not sent with th
   expect(posted.files ?? []).toEqual([]);
   await expect(sideChat).toContainText(replyText(followUp), { timeout: 30_000 });
 });
+
+for (const saveDrafts of [true, false]) {
+  test(`a file staged in the side chat goes with the conversation to the main chat, drafts ${saveDrafts ? 'saved' : 'not saved'} @scenario:side-chat-composer-staged-file-follows-${saveDrafts ? 'with' : 'without'}-saved-drafts`, async ({
+    page,
+  }) => {
+    test.setTimeout(120_000);
+    await page.addInitScript(
+      (value) => localStorage.setItem('saveDrafts', String(value)),
+      saveDrafts,
+    );
+    const { earlierUrl, sideChat, side } = await openBeside(page, 'staged');
+
+    await side.getByRole('button', { name: 'Attach and tools' }).click();
+    const [chooser] = await Promise.all([
+      page.waitForEvent('filechooser'),
+      page.getByRole('button', { name: 'Upload to Provider', exact: true }).click(),
+    ]);
+    await Promise.all([
+      page.waitForResponse(
+        (response) =>
+          response.url().includes('/api/files') && response.request().method() === 'POST',
+        { timeout: 30_000 },
+      ),
+      chooser.setFiles({
+        name: 'comes-along.txt',
+        mimeType: 'text/plain',
+        buffer: Buffer.from('Staged beside the chat.\n'),
+      }),
+    ]);
+    await expect(side.getByText('comes-along.txt')).toBeVisible();
+
+    await sideChat.getByRole('button', { name: 'Open as the main chat' }).click();
+
+    /** Staged once in main chat's composer, for the conversation it was staged for. */
+    await expect(page).toHaveURL(new URL(earlierUrl).pathname);
+    const main = page.locator('main form').first();
+    await expect(main.getByText('comes-along.txt')).toHaveCount(1);
+  });
+}

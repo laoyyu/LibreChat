@@ -73,6 +73,7 @@ import usePastedTextEdit from '~/hooks/Files/usePastedTextEdit';
 import useAskAnswerMode from '~/hooks/Input/useAskAnswerMode';
 import { useTargetContext } from '~/Providers/TargetContext';
 import useAttachTarget from '~/hooks/Input/useAttachTarget';
+import { handedComposerFilesFamily } from '~/store/handoff';
 import { chatDirectionAtom } from '~/store/chatDirection';
 import ProjectLandingChip from '../ProjectLandingChip';
 import useHasAccess from '~/hooks/Roles/useHasAccess';
@@ -308,6 +309,19 @@ const ChatForm = memo(function ChatForm({
     onBeforePrompt: preserveText,
     onPromptSettled: settleText,
   });
+
+  /**
+   * Files staged for this conversation beside the chat arrive here when it becomes the main
+   * chat: put with whatever this composer holds, once, by the composer the route addresses.
+   */
+  const [handedFiles, setHandedFiles] = useAtom(handedComposerFilesFamily(conversationId));
+  useEffect(() => {
+    if (!routed || handedFiles == null) {
+      return;
+    }
+    setHandedFiles(null);
+    setFiles((current) => new Map([...current, ...handedFiles]));
+  }, [handedFiles, routed, setFiles, setHandedFiles]);
 
   const discardFiles = useDiscardPastedFiles(index, conversationId);
   const pastedTextEdit = usePastedTextEdit({ index, files, setFiles, textAreaRef });
