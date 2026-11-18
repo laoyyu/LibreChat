@@ -10,7 +10,11 @@ import type { ChatStream, ChatTransport, ChatSendRequest } from '../../../core';
 import type { SideChatHost } from '../../../react/side/host';
 import type { SideChat } from '../../../react/side/state';
 import type { ChatHost } from '../../../react/chat/host';
-import { MessagesHostProvider, useMessagesHost } from '../../../react/messages/host';
+import {
+  useMessagesHost,
+  inertSeenSource,
+  MessagesHostProvider,
+} from '../../../react/messages/host';
 import { createTurnServices } from '../../../react/chat/__fixtures__/services';
 import { createMessagePartsHost } from '../../../__fixtures__/partsHost';
 import { ChatSurfaceProvider } from '../../../react/subagents/provider';
@@ -103,7 +107,10 @@ function UserRow({ text }: { text: string }) {
   return <div data-testid="row" data-added={added?.conversationId ?? 'none'}>{`user=${text}`}</div>;
 }
 
+/** The page's read state, which a list asks for when reading it can mark a conversation seen. */
+const pageSeenSource = jest.fn(() => inertSeenSource);
 const messagesHost = createMessagesHost({
+  useSeenSource: pageSeenSource,
   useGetAddedConvo: () => () => comparison,
   renderMessageBody: ({ message }) => <UserRow text={message.text ?? ''} />,
 });
@@ -240,6 +247,16 @@ describe('SideChatPanel', () => {
     expect(screen.getByRole('region', { name: 'Side chat' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Release follow-up' })).toBeInTheDocument();
     expect(field()).toHaveAttribute('placeholder', 'Message Release follow-up');
+  });
+
+  it("reports what is read here through the page's read state, as a conversation of the reader's", async () => {
+    pageSeenSource.mockClear();
+    setup();
+    await waitFor(() =>
+      expect(rows()).toEqual(['user=Investigate the release.', 'reply=It shipped.']),
+    );
+
+    expect(pageSeenSource).toHaveBeenCalled();
   });
 
   it('puts focus in its field once the conversation is in, wherever it was opened from', async () => {
