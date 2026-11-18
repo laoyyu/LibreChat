@@ -7,13 +7,13 @@ import { filesFamily, useFollowChat, SIDE_CHAT_PANE } from '@librechat/chat/reac
 import type { FollowedChat, SideChatHost, FollowChatOptions } from '@librechat/chat/react';
 import type { TMessage, TConversation, ChatFinalFrame } from 'librechat-data-provider';
 import { isTemporaryConversation, proveFetchedReplyByIdentity } from '~/utils';
+import { stagedForHandoff, handedComposerFilesFamily } from '~/store/handoff';
 import useNavigateToConvo from '~/hooks/Conversations/useNavigateToConvo';
 import useAttachmentHandler from '~/hooks/SSE/useAttachmentHandler';
 import { ARTIFACTS_SHEET_MAX_WIDTH } from '~/utils/breakpoints';
 import { createConversationCache } from '~/hooks/SSE/services';
 import { useConfiguredFooter } from '~/components/Chat/Footer';
 import SideChatSurface from '~/components/Chat/Side/Surface';
-import { handedComposerFilesFamily } from '~/store/handoff';
 import useScaledMaxWidth from '~/hooks/useScaledMaxWidth';
 import { useChatTransport } from './ChatTransportContext';
 import { useChatSettings } from './ChatSettingsContext';
@@ -94,16 +94,16 @@ function useChat(
 }
 
 /**
- * Opens the side conversation as the page's main chat. What its composer has staged goes with
- * it: taken from the side pane before the navigation clears every pane's files, and left for
- * main chat's composer to pick up once it holds the conversation.
+ * Opens the side conversation as the page's main chat. What its composer has staged and
+ * finished uploading goes with it: taken from the side pane before the navigation clears every
+ * pane's files, and left for main chat's composer to pick up once it holds the conversation.
  */
 function useOpenConversation(): (conversation: TConversation) => void {
   const { navigateToConvo } = useNavigateToConvo();
   const store = useStore();
   return useCallback(
     (conversation) => {
-      const staged = store.get(filesFamily(SIDE_CHAT_PANE));
+      const staged = stagedForHandoff(store.get(filesFamily(SIDE_CHAT_PANE)));
       const { conversationId } = conversation;
       if (staged.size > 0 && conversationId != null && conversationId !== '') {
         store.set(handedComposerFilesFamily(conversationId), staged);

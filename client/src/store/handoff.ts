@@ -11,3 +11,11 @@ import type { ExtendedFile } from '@librechat/chat';
 export const handedComposerFilesFamily = atomFamily((_conversationId: string) =>
   atom<Map<string, ExtendedFile> | null>(null),
 );
+
+/**
+ * What of a composer's staged files can go with its conversation: the ones whose upload has
+ * finished. One still on its way reports to the composer that started it, which is going away,
+ * so its record would never complete in another and would hold that composer's send back.
+ */
+export const stagedForHandoff = (files: Map<string, ExtendedFile>): Map<string, ExtendedFile> =>
+  new Map([...files].filter(([, file]) => file.progress >= 1));
