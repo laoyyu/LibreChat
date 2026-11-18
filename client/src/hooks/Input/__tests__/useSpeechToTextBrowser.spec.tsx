@@ -149,6 +149,21 @@ describe('useSpeechToTextBrowser', () => {
     expect(mockTranscribing).toBe(false);
   });
 
+  /* The recognizer outlives any one composer. One that goes away mid-take has to end the take,
+     or the microphone stays open with nothing on the page showing it or able to stop it. */
+  it('ends its own take when the composer goes away, and leaves one it does not own', () => {
+    const idle = setup();
+    idle.unmount();
+    expect(mockAbortListening).not.toHaveBeenCalled();
+
+    const recording = setup();
+    act(() => {
+      recording.result.current.startRecording(9);
+    });
+    recording.unmount();
+    expect(mockAbortListening).toHaveBeenCalledTimes(1);
+  });
+
   /* `abortListening` is optional on the recogniser module, and stopping still
      has to drop the take rather than leaving the microphone running. */
   it('falls back to stopping when the module cannot abort', () => {

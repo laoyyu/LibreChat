@@ -52,7 +52,13 @@ const useSpeechToTextBrowser = (
    * transcript and shows itself listening, so a take in one composer is never written into
    * another, or sent from it.
    */
-  const [owns, setOwns] = useState(false);
+  const [owns, setOwnsState] = useState(false);
+  /** Read where no render has caught up yet: a take started and the composer gone at once. */
+  const ownsRef = useRef(false);
+  const setOwns = useCallback((value: boolean) => {
+    ownsRef.current = value;
+    setOwnsState(value);
+  }, []);
   const {
     listening,
     finalTranscript,
@@ -116,7 +122,7 @@ const useSpeechToTextBrowser = (
     setStoppedTake(null);
     onTranscriptionSettled(stoppedTake.takeId);
     setOwns(false);
-  }, [stoppedTake, onTranscriptionSettled]);
+  }, [stoppedTake, onTranscriptionSettled, setOwns]);
 
   /**
    * A take the recognizer ended by itself is over too. Declared after the effects that write a
@@ -135,7 +141,7 @@ const useSpeechToTextBrowser = (
     if (heard.current) {
       setOwns(false);
     }
-  }, [listening, owns]);
+  }, [listening, owns, setOwns]);
 
   const startRecording = useCallback(
     (takeId?: number) => {
@@ -175,6 +181,7 @@ const useSpeechToTextBrowser = (
       });
     },
     [
+      setOwns,
       autoTranscribeAudio,
       browserSupportsSpeechRecognition,
       isMicrophoneAvailable,
@@ -217,7 +224,34 @@ const useSpeechToTextBrowser = (
     }
     resetTranscript();
     setOwns(false);
-  }, [resetTranscript]);
+  }, [resetTranscript, setOwns]);
+
+  /**
+   * A composer that goes away while its take is running ends it: the recognizer is the page's,
+   * and would otherwise keep the microphone open with no composer showing that it is, or
+   * offering to stop it. A take another composer owns is not this one's to end.
+   */
+  useEffect(
+    () => () => {
+      if (!ownsRef.current) {
+        return;
+      }
+      ownsRef.current = false;
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+        timeoutRef.current = null;
+      }
+      if (!hasSpeechRecognitionController(SpeechRecognition)) {
+        return;
+      }
+      if (typeof SpeechRecognition.abortListening === 'function') {
+        SpeechRecognition.abortListening();
+      } else {
+        SpeechRecognition.stopListening();
+      }
+    },
+    [],
+  );
 
   return {
     isListening,
