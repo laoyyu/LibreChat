@@ -149,6 +149,36 @@ describe('useSpeechToTextBrowser', () => {
     expect(mockTranscribing).toBe(false);
   });
 
+  /* Ownership is exclusive, not only per composer: with one composer recording, a second one
+     that starts must not become an owner too, or both would write the same speech down. */
+  it('refuses to start while another composer is recording, and can once that one is done', async () => {
+    const speech = jest.requireMock('react-speech-recognition').default as {
+      startListening: jest.Mock;
+    };
+    const first = setup();
+    const second = setup();
+    act(() => {
+      first.result.current.startRecording(1);
+    });
+    expect(speech.startListening).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      second.result.current.startRecording(2);
+    });
+    expect(speech.startListening).toHaveBeenCalledTimes(1);
+    expect(second.result.current.isListening).toBe(false);
+    expect(first.result.current.isListening).toBe(true);
+
+    await act(async () => {
+      await first.result.current.stopRecording();
+    });
+    act(() => {
+      second.result.current.startRecording(3);
+    });
+    expect(speech.startListening).toHaveBeenCalledTimes(2);
+    expect(second.result.current.isListening).toBe(true);
+  });
+
   /* The recognizer outlives any one composer. One that goes away mid-take has to end the take,
      or the microphone stays open with nothing on the page showing it or able to stop it. */
   it('ends its own take when the composer goes away, and leaves one it does not own', () => {

@@ -28,6 +28,12 @@ const SpeechRecognition = hasSpeechRecognitionController(speechRecognitionModule
   ? speechRecognitionModule
   : speechRecognitionModule.default;
 
+/**
+ * The composer holding the page's recognizer. There is one microphone to listen to, so one
+ * composer at a time: a second one that claimed it too would be handed the first one's words.
+ */
+let holder: object | null = null;
+
 const useSpeechToTextBrowser = (
   setText: (text: string, takeId?: number) => void,
   onTranscriptionComplete: (text: string, takeId?: number) => void,
@@ -55,10 +61,19 @@ const useSpeechToTextBrowser = (
   const [owns, setOwnsState] = useState(false);
   /** Read where no render has caught up yet: a take started and the composer gone at once. */
   const ownsRef = useRef(false);
-  const setOwns = useCallback((value: boolean) => {
-    ownsRef.current = value;
-    setOwnsState(value);
-  }, []);
+  const self = useRef({}).current;
+  const setOwns = useCallback(
+    (value: boolean) => {
+      if (value) {
+        holder = self;
+      } else if (holder === self) {
+        holder = null;
+      }
+      ownsRef.current = value;
+      setOwnsState(value);
+    },
+    [self],
+  );
   const {
     listening,
     finalTranscript,
@@ -174,6 +189,11 @@ const useSpeechToTextBrowser = (
         return;
       }
 
+      /** Another composer is recording. Its take is not this one's to share or to end. */
+      if (holder != null && holder !== self) {
+        showToast({ message: localize('com_ui_speech_in_use'), status: 'warning' });
+        return;
+      }
       setOwns(true);
       SpeechRecognition.startListening({
         language: languageSTT,
@@ -181,6 +201,7 @@ const useSpeechToTextBrowser = (
       });
     },
     [
+      self,
       setOwns,
       autoTranscribeAudio,
       browserSupportsSpeechRecognition,
@@ -237,6 +258,9 @@ const useSpeechToTextBrowser = (
         return;
       }
       ownsRef.current = false;
+      if (holder === self) {
+        holder = null;
+      }
       if (timeoutRef.current) {
         clearTimeout(timeoutRef.current);
         timeoutRef.current = null;
@@ -250,7 +274,7 @@ const useSpeechToTextBrowser = (
         SpeechRecognition.stopListening();
       }
     },
-    [],
+    [self],
   );
 
   return {
