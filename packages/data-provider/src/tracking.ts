@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { TProductTrackingConfig, TTelemetryConfig } from './config';
+import { sharingBrowserFacts, sharingServerFacts } from './tracking/sharing';
 
 /** Product events are off unless the deployment explicitly enables them. */
 export function getProductTrackingConfig(telemetry?: TTelemetryConfig): TProductTrackingConfig {
@@ -18,6 +19,7 @@ const feature = z.enum(['skills', 'prompts']);
 
 /** Browser observations never establish that a write or model execution succeeded. */
 export const browserProductFactSchema = z.discriminatedUnion('name', [
+  ...sharingBrowserFacts,
   z.strictObject({
     name: z.literal('librechat.session.activity'),
     feature: z.literal('session'),
@@ -35,6 +37,7 @@ export const browserProductFactSchema = z.discriminatedUnion('name', [
 
 /** Server facts follow confirmed settings writes. */
 export const serverProductFactSchema = z.discriminatedUnion('name', [
+  ...sharingServerFacts,
   z.strictObject({
     name: z.literal('librechat.langfuse.connection.changed'),
     enabled: z.boolean(),
